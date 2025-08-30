@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Agent POC</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .conversation {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 15px;
+            background-color: #f8f9fa;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: 20%;
+        }
+        .agent-message {
+            background-color: #28a745;
+            color: white;
+            margin-right: 20%;
+        }
+        .tool-message {
+            background-color: #ffc107;
+            color: #212529;
+            margin-left: 10%;
+            margin-right: 10%;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .error-message {
+            background-color: #dc3545;
+            color: white;
+            margin-left: 10%;
+            margin-right: 10%;
+        }
+        .loading {
+            display: none;
+        }
+        .loading.active {
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="mb-4">LLM Agent POC - Multi-Tool Reasoning</h1>
+        
+        <!-- Model Selection -->
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label for="provider" class="form-label">Provider</label>
+                <select class="form-select" id="provider">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="google">Google</option>
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label for="model" class="form-label">Model</label>
+                <select class="form-select" id="model">
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- API Key -->
+        <div class="mb-3">
+            <label for="apiKey" class="form-label">API Key</label>
+            <input type="password" class="form-control" id="apiKey" placeholder="Enter your API key">
+        </div>
+
+        <!-- Error Alert -->
+        <div id="errorAlert" class="alert alert-danger d-none" role="alert">
+            <span id="errorText"></span>
+        </div>
+
+        <!-- Conversation Window -->
+        <div class="conversation mb-3" id="conversation">
+            <div class="message agent-message">
+                <strong>Agent:</strong> Hello! I'm ready to help you with various tasks. I can search the web, execute code, and use AI workflows. What would you like to do?
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-group mb-3">
+            <input type="text" class="form-control" id="userInput" placeholder="Type your message...">
+            <button class="btn btn-primary" id="sendBtn" type="button">
+                Send
+                <span class="spinner-border spinner-border-sm loading" role="status"></span>
+            </button>
+        </div>
+
+        <!-- Tool Status -->
+        <div class="card">
+            <div class="card-header">
+                <h5>Available Tools</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <span class="badge bg-success">Google Search</span>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="badge bg-success">AI Pipe API</span>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="badge bg-success">JS Code Execution</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script>
+        class LLMAgent {
+            constructor() {
+                this.messages = [];
+                this.isProcessing = false;
+                this.tools = [
+                    {
+                        type: "function",
+                        function: {
+                            name: "google_search",
+                            description: "Search the web using Google Search API and return snippet results",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    query: {
+                                        type: "string",
+                                        description: "The search query"
+                                    }
+                                },
+                                required: ["query"]
+                            }
+                        }
+                    },
+                    {
+                        type: "function",
+                        function: {
+                            name: "ai_pipe",
+                            description: "Use AI Pipe API for flexible AI workflows and data processing",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    prompt: {
+                                        type: "string",
+                                        description: "The prompt or task for the AI workflow"
+                                    },
+                                    workflow: {
+                                        type: "string",
+                                        description: "The type of workflow (summarize, analyze, generate, etc.)"
+                                    }
+                                },
+                                required: ["prompt"]
+                            }
+                        }
+                    },
+                    {
+                        type: "function",
+                        function: {
+                            name: "execute_javascript",
+                            description: "Execute JavaScript code securely in the browser and return results",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    code: {
+                                        type: "string",
+                                        description: "The JavaScript code to execute"
+                                    }
+                                },
+                                required: ["code"]
+                            }
+                        }
+                    }
+                ];
+                this.initializeUI();
+            }
+
+            initializeUI() {
+                document.getElementById('sendBtn').addEventListener('click', () => this.handleUserInput());
+                document.getElementById('userInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.handleUserInput();
+                });
+
+                document.getElementById('provider').addEventListener('change', () => this.updateModelOptions());
+            }
+
+            updateModelOptions() {
+                const provider = document.getElementById('provider').value;
+                const modelSelect = document.getElementById('model');
+                modelSelect.innerHTML = '';
+
+                const models = {
+                    openai: ['gpt-4', 'gpt-3.5-turbo'],
+                    anthropic: ['claude-3-sonnet', 'claude-3-haiku'],
+                    google: ['gemini-pro', 'gemini-pro-vision']
+                };
+
+                models[provider].forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                });
+            }
+
+            showError(message) {
+                const errorAlert = document.getElementById('errorAlert');
+                const errorText = document.getElementById('errorText');
+                errorText.textContent = message;
+                errorAlert.classList.remove('d-none');
+                setTimeout(() => errorAlert.classList.add('d-none'), 5000);
+            }
+
+            addMessage(content, type = 'agent', toolCall = null) {
+                const conversation = document.getElementById('conversation');
+                const messageDiv = document.createElement('div');
+                
+                let className = 'message ';
+                let prefix = '';
+                
+                switch(type) {
+                    case 'user':
+                        className += 'user-message';
+                        prefix = 'User: ';
+                        break;
+                    case 'tool':
+                        className += 'tool-message';
+                        prefix = `Tool (${toolCall}): `;
+                        break;
+                    case 'error':
+                        className += 'error-message';
+                        prefix = 'Error: ';
+                        break;
+                    default:
+                        className += 'agent-message';
+                        prefix = 'Agent: ';
+                }
+
+                messageDiv.className = className;
+                messageDiv.innerHTML = `<strong>${prefix}</strong>${content}`;
+                conversation.appendChild(messageDiv);
+                conversation.scrollTop = conversation.scrollHeight;
+            }
+
+            setLoading(loading) {
+                const sendBtn = document.getElementById('sendBtn');
+                const spinner = sendBtn.querySelector('.loading');
+                const input = document.getElementById('userInput');
+                
+                if (loading) {
+                    spinner.classList.add('active');
+                    sendBtn.disabled = true;
+                    input.disabled = true;
+                } else {
+                    spinner.classList.remove('active');
+                    sendBtn.disabled = false;
+                    input.disabled = false;
+                }
+            }
+
+            async handleUserInput() {
+                const input = document.getElementById('userInput');
+                const userMessage = input.value.trim();
+                
+                if (!userMessage || this.isProcessing) return;
+
+                this.addMessage(userMessage, 'user');
+                this.messages.push({ role: 'user', content: userMessage });
+                input.value = '';
+                
+                await this.agentLoop();
+            }
+
+            async agentLoop() {
+                this.isProcessing = true;
+                this.setLoading(true);
+
+                try {
+                    while (true) {
+                        const response = await this.callLLM();
+                        
+                        if (response.content) {
+                            this.addMessage(response.content);
+                            this.messages.push({ role: 'assistant', content: response.content });
+                        }
+
+                        if (response.tool_calls && response.tool_calls.length > 0) {
+                            const toolResults = await Promise.all(
+                                response.tool_calls.map(tc => this.handleToolCall(tc))
+                            );
+                            
+                            // Add tool results to messages
+                            response.tool_calls.forEach((tc, index) => {
+                                this.messages.push({
+                                    role: 'tool',
+                                    tool_call_id: tc.id,
+                                    name: tc.function.name,
+                                    content: toolResults[index]
+                                });
+                            });
+                        } else {
+                            break; // No more tool calls, wait for user input
+                        }
+                    }
+                } catch (error) {
+                    this.showError(error.message);
+                    this.addMessage(error.message, 'error');
+                } finally {
+                    this.isProcessing = false;
+                    this.setLoading(false);
+                }
+            }
+
+            async callLLM() {
+                const apiKey = document.getElementById('apiKey').value;
+                const provider = document.getElementById('provider').value;
+                const model = document.getElementById('model').value;
+
+                if (!apiKey) {
+                    throw new Error('Please enter your API key');
+                }
+
+                // Simulate LLM API call
+                return this.simulateLLMCall();
+            }
+
+            simulateLLMCall() {
+                // Simulate LLM response based on last user message
+                const lastMessage = this.messages[this.messages.length - 1];
+                const content = lastMessage.content.toLowerCase();
+
+                if (content.includes('search') || content.includes('find') || content.includes('look up')) {
+                    const searchQuery = content.replace(/search|find|look up/g, '').trim();
+                    return {
+                        content: `I'll search for information about: ${searchQuery}`,
+                        tool_calls: [{
+                            id: 'search_' + Date.now(),
+                            type: 'function',
+                            function: {
+                                name: 'google_search',
+                                arguments: JSON.stringify({ query: searchQuery || 'general query' })
+                            }
+                        }]
+                    };
+                } else if (content.includes('code') || content.includes('calculate') || content.includes('execute')) {
+                    return {
+                        content: 'I\'ll execute some JavaScript code for you.',
+                        tool_calls: [{
+                            id: 'js_' + Date.now(),
+                            type: 'function',
+                            function: {
+                                name: 'execute_javascript',
+                                arguments: JSON.stringify({ 
+                                    code: 'console.log("Hello from executed code!"); return 2 + 2;' 
+                                })
+                            }
+                        }]
+                    };
+                } else if (content.includes('ai') || content.includes('workflow') || content.includes('process')) {
+                    return {
+                        content: 'I\'ll use the AI Pipe workflow for this task.',
+                        tool_calls: [{
+                            id: 'ai_' + Date.now(),
+                            type: 'function',
+                            function: {
+                                name: 'ai_pipe',
+                                arguments: JSON.stringify({ 
+                                    prompt: content,
+                                    workflow: 'analyze'
+                                })
+                            }
+                        }]
+                    };
+                } else {
+                    return {
+                        content: 'I understand your request. I can help you with searching the web, executing code, or using AI workflows. Try asking me to search for something, run some code, or process data with AI.',
+                        tool_calls: []
+                    };
+                }
+            }
+
+            async handleToolCall(toolCall) {
+                const { name, arguments: args } = toolCall.function;
+                const parsedArgs = JSON.parse(args);
+
+                try {
+                    let result;
+                    switch (name) {
+                        case 'google_search':
+                            result = await this.googleSearch(parsedArgs.query);
+                            break;
+                        case 'ai_pipe':
+                            result = await this.aiPipe(parsedArgs.prompt, parsedArgs.workflow);
+                            break;
+                        case 'execute_javascript':
+                            result = await this.executeJavaScript(parsedArgs.code);
+                            break;
+                        default:
+                            throw new Error(`Unknown tool: ${name}`);
+                    }
+
+                    this.addMessage(result, 'tool', name);
+                    return result;
+                } catch (error) {
+                    const errorMsg = `Error in ${name}: ${error.message}`;
+                    this.addMessage(errorMsg, 'error');
+                    return errorMsg;
+                }
+            }
+
+            async googleSearch(query) {
+                // Simulate Google Search API
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                return `Search results for "${query}":
+1. Wikipedia article about ${query}
+2. Official website for ${query}
+3. Recent news about ${query}
+4. Related articles and resources
+
+(This is a simulated search result. In a real implementation, this would use the Google Search API)`;
+            }
+
+            async aiPipe(prompt, workflow = 'general') {
+                // Simulate AI Pipe API
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                return `AI Pipe workflow "${workflow}" completed for prompt: "${prompt}"
+
+Analysis: This appears to be a ${workflow} task that would benefit from structured AI processing. The system would typically process this through multiple AI models to provide comprehensive results.
+
+(This is a simulated AI Pipe result. In a real implementation, this would connect to the AI Pipe API)`;
+            }
+
+            async executeJavaScript(code) {
+                try {
+                    // Create a safe execution environment
+                    const result = new Function('console', `
+                        const logs = [];
+                        const mockConsole = {
+                            log: (...args) => logs.push(args.join(' ')),
+                            error: (...args) => logs.push('ERROR: ' + args.join(' ')),
+                            warn: (...args) => logs.push('WARN: ' + args.join(' '))
+                        };
+                        
+                        try {
+                            const returnValue = (function() {
+                                ${code}
+                            })();
+                            return { result: returnValue, logs };
+                        } catch (error) {
+                            return { error: error.message, logs };
+                        }
+                    `)({
+                        log: console.log,
+                        error: console.error,
+                        warn: console.warn
+                    });
+
+                    if (result.error) {
+                        return `JavaScript execution error: ${result.error}`;
+                    }
+
+                    let output = `JavaScript executed successfully.`;
+                    if (result.logs.length > 0) {
+                        output += `\nConsole output: ${result.logs.join('\n')}`;
+                    }
+                    if (result.result !== undefined) {
+                        output += `\nReturn value: ${JSON.stringify(result.result)}`;
+                    }
+
+                    return output;
+                } catch (error) {
+                    return `Code execution failed: ${error.message}`;
+                }
+            }
+        }
+
+        // Initialize the agent when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new LLMAgent();
+        });
+    </script>
+</body>
+</html>
